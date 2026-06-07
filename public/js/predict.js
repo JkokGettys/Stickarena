@@ -13,9 +13,19 @@ let SPEED = 240;
 let ACCEL = 14;
 let RADIUS = 17;
 
-let state = null; // { x, y, vx, vy, a } — null until the first snapshot
+let state = null; // { x, y, vx, vy, a } — authoritative-predicted truth, null until first snapshot
 let pending = []; // unacknowledged inputs: [{ seq, inp, dt }]
 let enabled = false; // false while dead / before first snapshot
+
+// Smooth error correction: rather than snapping `state` to each reconciled
+// position (which jitters the camera 30x/sec), we keep `state` as truth and
+// carry the visual discrepancy in a decaying offset. The rendered position is
+// state + error, and `error` eases to zero over a few frames.
+let errX = 0;
+let errY = 0;
+let lastSampleT = 0;
+const ERR_TAU = 0.07; // seconds — correction half-life-ish (smaller = snappier)
+const SNAP_DIST = 160; // px — beyond this we hard-snap (teleport/respawn/big knockback)
 
 export function setConfig(c) {
   cfg = c;
@@ -32,6 +42,9 @@ export function reset() {
   state = null;
   pending = [];
   enabled = false;
+  errX = 0;
+  errY = 0;
+  lastSampleT = 0;
 }
 
 function clamp(v, a, b) {
@@ -130,9 +143,16 @@ export function reconcile(self) {
     state.vy = 0;
     pending = [];
     enabled = false;
+    errX = 0;
+    errY = 0;
     return;
   }
+  const wasEnabled = enabled;
   enabled = true;
+
+  // Where we're currently *showing* the player (truth + leftover offset).
+  const shownX = state.x + errX;
+  const shownY = state.y + errY;
 
   // Start from the authoritative state (captures knockback, separation, respawn).
   const base = {
@@ -147,13 +167,45 @@ export function reconcile(self) {
   if (self.seq !== undefined) pending = pending.filter((p) => p.seq > self.seq);
   for (const p of pending) step(base, p.inp, p.dt);
 
+  // New truth.
   state.x = base.x;
   state.y = base.y;
   state.vx = base.vx;
   state.vy = base.vy;
+
+  // Re-express the offset so the *rendered* position is continuous: keep showing
+  // shownX/Y this instant, then let the offset ease to zero over the next frames.
+  if (wasEnabled) {
+    errX = shownX - state.x;
+    errY = shownY - state.y;
+    // A correction this large isn't a prediction miss — it's a teleport/respawn.
+    // Don't slide across the map; snap.
+    if (errX * errX + errY * errY > SNAP_DIST * SNAP_DIST) {
+      errX = 0;
+      errY = 0;
+    }
+  } else {
+    errX = 0;
+    errY = 0;
+  }
 }
 
-// Predicted local position, or null when prediction is inactive.
+// Predicted local position (truth + decaying correction offset), or null when
+// prediction is inactive. Called once per render frame; decays the offset by
+// real elapsed time so smoothing is frame-rate independent.
 export function getState() {
-  return enabled && state ? state : null;
+  if (!enabled || !state) return null;
+  const now = performance.now();
+  const dt = lastSampleT ? (now - lastSampleT) / 1000 : 0;
+  lastSampleT = now;
+  if (dt > 0 && (errX !== 0 || errY !== 0)) {
+    const decay = Math.exp(-dt / ERR_TAU);
+    errX *= decay;
+    errY *= decay;
+    if (errX * errX + errY * errY < 0.01) {
+      errX = 0;
+      errY = 0;
+    }
+  }
+  return { x: state.x + errX, y: state.y + errY, vx: state.vx, vy: state.vy, a: state.a };
 }
