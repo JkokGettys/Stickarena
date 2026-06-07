@@ -72,6 +72,9 @@ export function init() {
 export function setActive(v) {
   active = v;
   if (!v) clearKeys();
+  // Hide the OS cursor while playing (canvas draws its own crosshair); show it
+  // again on menus / the end screen so vote buttons are clickable.
+  document.body.style.cursor = v ? 'none' : 'auto';
 }
 export function getAim() {
   return Math.atan2(mouseY - window.innerHeight / 2, mouseX - window.innerWidth / 2);

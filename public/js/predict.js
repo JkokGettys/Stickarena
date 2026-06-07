@@ -36,15 +36,22 @@ let errY = 0;
 const ERR_TAU = 0.08; // seconds — correction half-life-ish (smaller = snappier)
 const SNAP_DIST = 160; // px — beyond this we hard-snap (teleport/respawn/big knockback)
 
+// Global config (physics tuning) — set once on connect.
 export function setConfig(c) {
-  cfg = c;
-  TILE = c.tile;
   if (c.phys) {
     SPEED = c.phys.speed;
     ACCEL = c.phys.accel;
     RADIUS = c.phys.radius;
   }
-  solid = c.solid ? c.solid.map((s) => s.split('').map(Number)) : null;
+}
+
+// Per-map collision geometry — set on connect and again on every map change.
+// Resets prediction so reconciliation replays against the new map's walls.
+export function setMap(m) {
+  cfg = m;
+  TILE = m.tile;
+  solid = m.solid ? m.solid.map((s) => s.split('').map(Number)) : null;
+  reset();
 }
 
 export function reset() {

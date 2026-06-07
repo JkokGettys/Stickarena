@@ -62,6 +62,11 @@ function handle(msg) {
     case 'config':
       emit('config', msg);
       break;
+    case 'mapchange':
+      // Delivered as its own message (FIFO) before the next snapshot, so listeners
+      // can rebuild render/predict map state before the new map's entities arrive.
+      emit('mapchange', msg.map);
+      break;
     case 'spawned':
       selfId = msg.id;
       snaps.length = 0; // drop stale interpolation from a previous connection/life
@@ -76,7 +81,25 @@ function handle(msg) {
 function pushSnap(msg) {
   const ents = new Map();
   for (const e of msg.ents) ents.set(e.id, e);
-  snaps.push({ time: performance.now(), self: msg.self, ents, lb: msg.lb, feed: msg.feed, humans: msg.humans, rank: msg.rank, total: msg.total });
+  // If the map changed under us, discard the old map's buffer so we never lerp a
+  // position across two different maps (the mapId-tagged snapshots make this safe).
+  if (snaps.length && snaps[snaps.length - 1].mapId !== msg.mapId) snaps.length = 0;
+  snaps.push({
+    time: performance.now(),
+    self: msg.self,
+    ents,
+    lb: msg.lb,
+    feed: msg.feed,
+    humans: msg.humans,
+    rank: msg.rank,
+    total: msg.total,
+    mapId: msg.mapId,
+    phase: msg.phase,
+    timeLeft: msg.timeLeft,
+    standings: msg.standings,
+    votes: msg.votes,
+    vote: msg.vote,
+  });
   if (snaps.length > MAX_SNAPS) snaps.shift();
 
   // Reconcile the locally-predicted player against this authoritative snapshot.
@@ -171,6 +194,8 @@ export function sample() {
     s0 = snaps[0];
     s1 = snaps[1] || snaps[0];
   }
+  // Defensive: never interpolate across a map boundary (positions are unrelated).
+  if (s0.mapId !== s1.mapId) s0 = s1;
 
   const span = s1.time - s0.time;
   const t = span > 0 ? clamp01((renderTime - s0.time) / span) : 0;
@@ -181,5 +206,19 @@ export function sample() {
     ents.push(e0 ? lerpEnt(e0, e1, t) : e1);
   }
 
-  return { self: lerpSelf(s0.self, s1.self, t), ents, lb: s1.lb, feed: s1.feed, humans: s1.humans, rank: s1.rank, total: s1.total };
+  return {
+    self: lerpSelf(s0.self, s1.self, t),
+    ents,
+    lb: s1.lb,
+    feed: s1.feed,
+    humans: s1.humans,
+    rank: s1.rank,
+    total: s1.total,
+    mapId: s1.mapId,
+    phase: s1.phase,
+    timeLeft: s1.timeLeft,
+    standings: s1.standings,
+    votes: s1.votes,
+    vote: s1.vote,
+  };
 }

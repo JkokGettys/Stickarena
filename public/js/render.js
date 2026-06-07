@@ -11,16 +11,29 @@ const COL = {
   wallTop: '#2d3850',
 };
 
-// cell type -> sprite key / fallback colour (indices match server map T codes)
-const FLOOR_SPR = ['grass', 'road', 'sidewalk', 'floor', 'wood', 'tilefloor'];
-const FLOOR_COL = ['#3f7d3f', '#3a3d45', '#9a9a92', '#39506e', '#6e4a28', '#cdc8bc'];
-const WALL_SPR = { 6: 'building', 7: 'wall' };
-const WALL_COL = { 6: '#6b4a3a', 7: '#2d3850' };
+// cell type -> sprite key / fallback colour (indices match server map T codes).
+// The active tileset is supplied per-map by setMap(); this is the city fallback.
+const DEFAULT_TILESET = {
+  floorSpr: ['grass', 'road', 'sidewalk', 'floor', 'wood', 'tilefloor'],
+  floorCol: ['#3f7d3f', '#3a3d45', '#9a9a92', '#39506e', '#6e4a28', '#cdc8bc'],
+  wallSpr: { 6: 'building', 7: 'wall' },
+  wallCol: { 6: '#6b4a3a', 7: '#2d3850' },
+};
+let tileset = DEFAULT_TILESET;
+
+// Multiplier on tile size for prop sprites (bigger = reads as a tall/large object).
+const PROP_SCALE = {
+  fountain: 2.1, palm: 2.2, tree: 1.6, car: 1.5,
+  ruinpillar: 1.5, serverrack: 1.5, containment: 1.7, console: 1.2,
+};
 const PROP_COL = {
   chair: '#6b4a2e', table: '#8a5a34', couch: '#3f6b6b', tv: '#15171d',
   bookshelf: '#5a3f28', shelf: '#7a7a82', counter: '#9a8a6a', bed: '#7a6f9a',
   tree: '#3fae5a', car: '#c0504a', streetlight: '#4a4a52', bench: '#6b4a2e', hydrant: '#c0504a',
   fountain: '#7fb0d0', planter: '#5a7a3a',
+  // desert + sci-fi prop fallback tints (used until the sprites are generated)
+  amphora: '#b07a4a', cactus: '#3f8a4a', palm: '#3fae5a', ruinpillar: '#cdbfa0',
+  serverrack: '#23262e', console: '#3a4a5a', containment: '#6fb6d6', canister: '#c08a3a',
 };
 
 let canvas = null;
@@ -58,7 +71,10 @@ export function resize() {
   canvas.style.height = H + 'px';
 }
 
+let assetsLoaded = false;
 export function loadAssets(manifest) {
+  if (assetsLoaded) return; // load the (combined, all-maps) manifest exactly once
+  assetsLoaded = true;
   for (const [key, file] of Object.entries(manifest || {})) {
     const img = new Image();
     images[key] = { img, loaded: false };
@@ -77,16 +93,26 @@ function spr(key) {
   return e && e.loaded ? e.img : null;
 }
 
+// Global config (physics, weapons, assets, match/maps) — merged once on connect.
 export function setConfig(c) {
-  cfg = c;
-  grid = c.grid.map((s) => s.split('').map(Number));
+  cfg = { ...(cfg || {}), ...c };
+}
+
+// Per-map state — called on connect and on every 'mapchange'. Rebuilds the grid,
+// corner-rotation cache, prop world positions and tileset, and drops the tile
+// cache (sprite art differs per map).
+export function setMap(m) {
+  cfg = { ...(cfg || {}), tile: m.tile, cols: m.cols, rows: m.rows, w: m.w, h: m.h, mapId: m.id, mapName: m.name };
+  tileset = m.tileset || DEFAULT_TILESET;
+  grid = m.grid.map((s) => s.split('').map(Number));
   wallCorner = grid.map((row, y) => row.map((cell, x) => (cell === 6 ? cornerRotation(x, y) : -1)));
-  props = c.props.map((p) => ({
+  props = m.props.map((p) => ({
     type: p.type,
-    x: (p.x + 0.5) * c.tile,
-    y: (p.y + 0.5) * c.tile,
+    x: (p.x + 0.5) * m.tile,
+    y: (p.y + 0.5) * m.tile,
     rot: p.r || 0,
   }));
+  for (const k in tileCache) delete tileCache[k];
 }
 
 // A building (exterior) wall cell is an outer corner when exactly two of its
@@ -129,7 +155,7 @@ export function draw(view, opts) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = COL.oob;
   ctx.fillRect(0, 0, W, H);
-  if (!cfg) return;
+  if (!cfg || !grid) return;
   if (!view || !view.self) return;
 
   const self = view.self;
@@ -198,10 +224,10 @@ function drawFloorWalls(left, right, top, bottom, px) {
       if (c >= 6) continue; // walls drawn in second pass
       const x = tx * t;
       const y = ty * t;
-      const img = tile(FLOOR_SPR[c]);
+      const img = tile(tileset.floorSpr[c]);
       if (img) ctx.drawImage(img, x, y, t, t);
       else {
-        ctx.fillStyle = FLOOR_COL[c] || COL.floorA;
+        ctx.fillStyle = tileset.floorCol[c] || COL.floorA;
         ctx.fillRect(x, y, t, t);
       }
     }
@@ -213,8 +239,9 @@ function drawFloorWalls(left, right, top, bottom, px) {
       if (c < 6) continue;
       const x = tx * t;
       const y = ty * t;
-      const cornerImg = c === 6 && wallCorner[ty][tx] >= 0 ? tile('wallcorner') : null;
-      const img = cornerImg || tile(WALL_SPR[c]);
+      // wallcorner.png is the city's brick coping; only use it on that tileset.
+      const cornerImg = c === 6 && wallCorner[ty][tx] >= 0 && tileset.wallSpr[6] === 'building' ? tile('wallcorner') : null;
+      const img = cornerImg || tile(tileset.wallSpr[c]);
       if (cornerImg) {
         ctx.save();
         ctx.translate(x + t / 2, y + t / 2);
@@ -224,7 +251,7 @@ function drawFloorWalls(left, right, top, bottom, px) {
       } else if (img) {
         ctx.drawImage(img, x, y, t, t);
       } else {
-        ctx.fillStyle = WALL_COL[c] || COL.wall;
+        ctx.fillStyle = tileset.wallCol[c] || COL.wall;
         ctx.fillRect(x, y, t, t);
         ctx.fillStyle = 'rgba(255,255,255,0.06)';
         ctx.fillRect(x + 2 * px, y + 2 * px, t - 4 * px, t - 6 * px);
@@ -238,7 +265,7 @@ function drawProps(px) {
   for (const p of props) {
     const img = spr(p.type);
     if (img) {
-      const s = p.type === 'fountain' ? t * 2.1 : t * 1.1;
+      const s = (PROP_SCALE[p.type] || 1.1) * t;
       if (p.rot) {
         ctx.save();
         ctx.translate(p.x, p.y);
@@ -286,14 +313,36 @@ function drawProps(px) {
       ctx.beginPath();
       ctx.arc(p.x, p.y - t * 0.12, t * 0.3, 0, 7);
       ctx.fill();
-    } else if (p.type === 'tree') {
+    } else if (p.type === 'tree' || p.type === 'palm') {
       ctx.fillStyle = '#5a3a22';
       rr(p.x - t * 0.12, p.y + t * 0.05, t * 0.24, t * 0.3, 3);
       ctx.fill();
-      ctx.fillStyle = '#3fae5a';
+      ctx.fillStyle = p.type === 'palm' ? '#4fbf6a' : '#3fae5a';
       ctx.beginPath();
-      ctx.arc(p.x, p.y - t * 0.1, t * 0.46, 0, 7);
+      ctx.arc(p.x, p.y - t * 0.1, t * (p.type === 'palm' ? 0.5 : 0.46), 0, 7);
       ctx.fill();
+    } else if (p.type === 'cactus') {
+      ctx.fillStyle = '#3f8a4a';
+      rr(p.x - t * 0.1, p.y - t * 0.4, t * 0.2, t * 0.8, 5);
+      ctx.fill();
+      rr(p.x - t * 0.32, p.y - t * 0.1, t * 0.22, t * 0.16, 5);
+      ctx.fill();
+      rr(p.x + t * 0.1, p.y - t * 0.2, t * 0.22, t * 0.16, 5);
+      ctx.fill();
+    } else if (p.type === 'containment') {
+      ctx.fillStyle = 'rgba(120,200,230,0.35)';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, t * 0.42, 0, 7);
+      ctx.fill();
+      ctx.strokeStyle = '#9fe0f5';
+      ctx.lineWidth = 2 * px;
+      ctx.stroke();
+    } else if (p.type === 'serverrack') {
+      ctx.fillStyle = '#23262e';
+      rr(p.x - t * 0.34, p.y - t * 0.44, t * 0.68, t * 0.88, 4);
+      ctx.fill();
+      ctx.fillStyle = '#46e06a';
+      for (let i = 0; i < 4; i++) ctx.fillRect(p.x - t * 0.26, p.y - t * 0.34 + i * t * 0.2, t * 0.52, t * 0.05);
     } else {
       // generic placeholder for props whose sprite hasn't been generated yet
       ctx.fillStyle = PROP_COL[p.type] || '#8a6a4a';
@@ -746,16 +795,21 @@ function drawHUD(view, opts) {
   ctx.textAlign = 'right';
   ctx.fillText(`${opts.selfName}  ·  ${self.frags} frags`, hbX + hbW - 10, hbY + 13);
 
-  // rank (top-center)
+  // match timer (top-center) during play, then rank + headcount below it
+  let topY = 12;
+  if (view.phase === 'playing' && typeof view.timeLeft === 'number') {
+    drawMatchTimer(view.timeLeft);
+    topY = 40;
+  }
   const rank = view.rank > 0 ? ordinal(view.rank) : '-';
-  ctx.font = "bold 30px 'Trebuchet MS', sans-serif";
+  ctx.font = "bold 26px 'Trebuchet MS', sans-serif";
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   ctx.fillStyle = 'rgba(255,255,255,0.92)';
-  ctx.fillText(rank, W / 2, 12);
+  ctx.fillText(rank, W / 2, topY);
   ctx.font = "12px 'Trebuchet MS', sans-serif";
   ctx.fillStyle = 'rgba(220,225,255,0.6)';
-  ctx.fillText(`${view.humans} online · ${view.total} fighters`, W / 2, 46);
+  ctx.fillText(`${view.humans} online · ${view.total} fighters`, W / 2, topY + 28);
 
   // weapon + ammo (bottom-left)
   const wid = self.weapon;
@@ -950,6 +1004,17 @@ function drawRespawn(self, opts) {
   ctx.fillText(by, W / 2, H / 2 + 6);
   ctx.fillStyle = 'rgba(220,225,255,0.7)';
   ctx.fillText(`Respawning in ${Math.ceil(self.respawnIn)}…`, W / 2, H / 2 + 34);
+}
+
+function drawMatchTimer(timeLeft) {
+  const s = Math.max(0, Math.ceil(timeLeft));
+  const mm = Math.floor(s / 60);
+  const ss = (s % 60).toString().padStart(2, '0');
+  ctx.font = "bold 22px 'Trebuchet MS', sans-serif";
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = s <= 30 ? '#ff8a72' : 'rgba(255,255,255,0.95)'; // warn in the final 30s
+  ctx.fillText(`${mm}:${ss}`, W / 2, 8);
 }
 
 function ordinal(n) {

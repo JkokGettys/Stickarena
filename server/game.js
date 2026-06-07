@@ -2,9 +2,11 @@
 
 const C = require('./constants');
 const { rand, clamp, dist2, angleDiff } = require('./util');
-const { GameMap } = require('./map');
+const { createMap, MAPS, MAP_IDS, DEFAULT_MAP } = require('./map');
 const { Player, Pickup } = require('./entities');
 const { botThink } = require('./bots');
+
+const r1 = (v) => Math.round(v * 10) / 10;
 
 const BOT_NAMES = [
   'Slash', 'Voodoo', 'Reaper', 'Ghost', 'Blaze', 'Havoc', 'Jinx', 'Riot', 'Mantis', 'Onyx',
@@ -17,12 +19,23 @@ class Game {
     this.tick = 0;
     this.targetBots = targetBots;
 
-    this.map = new GameMap();
+    this.currentMapId = DEFAULT_MAP;
+    this.map = createMap(this.currentMapId);
     this.players = new Map();
     this.pickups = new Map();
     this.effects = [];
     this.feed = [];
     this._killId = 0;
+
+    // --- match / round state ---
+    this.phase = 'playing'; // 'playing' | 'intermission'
+    this.matchEndsAt = this.now + C.MATCH_DURATION;
+    this.intermissionEndsAt = 0;
+    this.matchCount = 0;
+    this.votes = new Map(); // playerId -> mapId (only during intermission)
+    this.frozenStandings = []; // standings snapshot, frozen for the end screen
+    this.frozenFeed = []; // kill feed frozen at match end
+    this.mapChangeFlag = false; // set when a new match starts; index.js broadcasts 'mapchange'
 
     // Each weapon spawn refills its pickup after a delay once taken.
     this.spawnStates = this.map.weaponSpawns.map((s) => ({ spawn: s, pickupId: null, nextSpawn: 0 }));
@@ -67,6 +80,7 @@ class Game {
 
   removePlayer(id) {
     this.players.delete(id);
+    this.votes.delete(id); // don't let a departed player's vote skew the tally
   }
 
   addEffect(e) {
@@ -79,6 +93,19 @@ class Game {
     this.tick++;
     this.effects.length = 0;
 
+    if (this.phase === 'playing') {
+      if (this.now >= this.matchEndsAt) {
+        this.startIntermission();
+        return; // freeze this tick; no further sim
+      }
+      this.simulate(dt);
+    } else {
+      // intermission: the world is frozen behind the end screen / voting overlay.
+      if (this.now >= this.intermissionEndsAt) this.startMatch(this.tallyVotes());
+    }
+  }
+
+  simulate(dt) {
     for (const p of this.players.values()) {
       if (p.isBot && !p.dead) botThink(p, this, dt);
     }
@@ -98,6 +125,99 @@ class Game {
     this.handlePickups();
     this.refillSpawns();
     this.expireDrops();
+  }
+
+  // ---- match lifecycle -------------------------------------------------
+  // End of a match: snapshot the final standings + kill feed (so the end screen
+  // is stable for the whole 30s), open voting, and seed bot votes for liveliness.
+  startIntermission() {
+    this.phase = 'intermission';
+    this.intermissionEndsAt = this.now + C.INTERMISSION;
+    this.frozenStandings = this.computeStandings();
+    this.frozenFeed = this.feed.slice();
+    this.votes.clear();
+    for (const p of this.players.values()) {
+      if (p.isBot) this.votes.set(p.id, MAP_IDS[Math.floor(Math.random() * MAP_IDS.length)]);
+    }
+  }
+
+  // Highest-voted map wins; ties broken randomly; with no votes at all the maps
+  // rotate so an empty server still cycles scenery.
+  tallyVotes() {
+    const tally = this.voteTally();
+    let best = -1;
+    let leaders = [];
+    for (const id of MAP_IDS) {
+      const c = tally[id] || 0;
+      if (c > best) {
+        best = c;
+        leaders = [id];
+      } else if (c === best) {
+        leaders.push(id);
+      }
+    }
+    if (best <= 0) return MAP_IDS[this.matchCount % MAP_IDS.length];
+    return leaders[Math.floor(Math.random() * leaders.length)];
+  }
+
+  // Start a fresh match on `mapId`: swap the map, wipe pickups/feed/effects/votes,
+  // zero every player's K/D and respawn them on the new map.
+  startMatch(mapId) {
+    this.currentMapId = MAPS[mapId] ? mapId : DEFAULT_MAP;
+    this.map = createMap(this.currentMapId);
+
+    this.pickups.clear();
+    this.spawnStates = this.map.weaponSpawns.map((s) => ({ spawn: s, pickupId: null, nextSpawn: 0 }));
+    for (const st of this.spawnStates) this.createSpawnPickup(st);
+
+    for (const p of this.players.values()) {
+      p.frags = 0;
+      p.deaths = 0;
+      p.streak = 0;
+      p.killerName = null;
+      const spot = this.map.pickSpawn([...this.players.values()]);
+      p.spawn(spot.x, spot.y, this.now); // resets health/weapon/ammo/dead/respawn
+    }
+
+    this.feed = [];
+    this.frozenFeed = [];
+    this.frozenStandings = [];
+    this.effects.length = 0;
+    this.votes.clear();
+
+    this.phase = 'playing';
+    this.matchEndsAt = this.now + C.MATCH_DURATION;
+    this.matchCount++;
+    this.mapChangeFlag = true;
+
+    this.ensureBots(this.targetBots);
+  }
+
+  // Record a player's map vote — only meaningful during intermission.
+  recordVote(playerId, mapId) {
+    if (this.phase !== 'intermission') return;
+    if (!MAPS[mapId] || !this.players.has(playerId)) return;
+    this.votes.set(playerId, mapId);
+  }
+
+  voteTally() {
+    const tally = {};
+    for (const id of this.votes.values()) {
+      if (MAPS[id]) tally[id] = (tally[id] || 0) + 1;
+    }
+    return tally;
+  }
+
+  computeStandings() {
+    const ranked = [...this.players.values()].sort((a, b) => b.frags - a.frags || a.deaths - b.deaths);
+    return ranked.map((p) => ({ n: p.name, f: p.frags, d: p.deaths, id: p.id, bot: p.isBot ? 1 : 0 }));
+  }
+
+  // index.js calls this after each step; a true result means broadcast a 'mapchange'.
+  consumeMapChange() {
+    const v = this.mapChangeFlag;
+    this.mapChangeFlag = false;
+    return v;
   }
 
   updatePlayer(p, dt) {
@@ -345,13 +465,29 @@ class Game {
     }
     for (const k of this.pickups.values()) allEnts.push(k.net());
 
-    return { allEnts, fx: this.effects, lb, feed: this.feed.slice(-6), humans, rankById, total: ranked.length };
+    const intermission = this.phase === 'intermission';
+    const timeLeft = r1(Math.max(0, (intermission ? this.intermissionEndsAt : this.matchEndsAt) - this.now));
+
+    return {
+      allEnts,
+      fx: this.effects,
+      lb,
+      feed: intermission ? this.frozenFeed.slice(-6) : this.feed.slice(-6),
+      humans,
+      rankById,
+      total: ranked.length,
+      mapId: this.currentMapId,
+      phase: this.phase,
+      timeLeft,
+      standings: intermission ? this.frozenStandings : null,
+      votes: intermission ? this.voteTally() : null,
+    };
   }
 
   buildSnapshot(viewer, shared) {
     const ents = [];
     for (const e of shared.allEnts) if (e.id !== viewer.id) ents.push(e);
-    return {
+    const snap = {
       t: 'u',
       self: viewer.selfState(this.now),
       ents,
@@ -361,7 +497,16 @@ class Game {
       humans: shared.humans,
       rank: shared.rankById.get(viewer.id) || 0,
       total: shared.total,
+      mapId: shared.mapId,
+      phase: shared.phase,
+      timeLeft: shared.timeLeft,
     };
+    if (shared.phase === 'intermission') {
+      snap.standings = shared.standings;
+      snap.votes = shared.votes;
+      snap.vote = this.votes.get(viewer.id) || null;
+    }
+    return snap;
   }
 }
 

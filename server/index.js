@@ -7,6 +7,7 @@ const WebSocket = require('ws');
 
 const C = require('./constants');
 const { Game } = require('./game');
+const { MAPS, MAP_IDS } = require('./map');
 
 const PORT = process.env.PORT || process.argv[2] || 3000;
 const PUBLIC = path.join(__dirname, '..', 'public');
@@ -56,6 +57,24 @@ const ASSETS = {
   fountain: 'fountain.png',
   planter: 'planter.png',
   wallcorner: 'wallcorner.png',
+  // desert map (tiles kept opaque/tileable; props chroma-keyed)
+  sand: 'sand.png',
+  desertstone: 'desertstone.png',
+  adobe: 'adobe.png',
+  mudwall: 'mudwall.png',
+  palm: 'palm.png',
+  cactus: 'cactus.png',
+  amphora: 'amphora.png',
+  ruinpillar: 'ruinpillar.png',
+  // sci-fi map
+  metalfloor: 'metalfloor.png',
+  hazardfloor: 'hazardfloor.png',
+  hullwall: 'hullwall.png',
+  glasswall: 'glasswall.png',
+  serverrack: 'serverrack.png',
+  console: 'console.png',
+  containment: 'containment.png',
+  canister: 'canister.png',
 };
 
 // ---- static server -------------------------------------------------------
@@ -102,27 +121,45 @@ for (const [id, w] of Object.entries(C.WEAPONS)) {
   weaponsClient[id] = { name: w.name, kind: w.kind, ammo: w.ammo === Infinity ? -1 : w.ammo, sprite: w.sprite };
 }
 
-const props = game.map.props.map((p) => ({ type: p.type, x: p.tx, y: p.ty, r: p.rot || 0 }));
+// Everything a client needs to render + mirror-simulate one map. Rebuilt for the
+// current map on connect, and again (as a 'mapchange' message) whenever a new
+// match swaps the map mid-session.
+function buildMapPayload(map) {
+  return {
+    id: map.id,
+    name: map.name,
+    tile: C.TILE,
+    cols: map.cols,
+    rows: map.rows,
+    w: map.w,
+    h: map.h,
+    grid: map.typeStrings(),
+    // Authoritative solidity per cell (type>=6 OR a solid prop on a floor tile).
+    // Sent so the client can mirror server collision for movement prediction.
+    solid: map.solid.map((row) => row.map((b) => (b ? 1 : 0)).join('')),
+    props: map.props.map((p) => ({ type: p.type, x: p.tx, y: p.ty, r: p.rot || 0 })),
+    weaponSpawns: map.weaponSpawns.map((s) => ({ weapon: s.weapon, x: s.x, y: s.y })),
+    tileset: map.tileset, // code -> sprite key + fallback colour
+  };
+}
 
-const CONFIG_MSG = JSON.stringify({
-  t: 'config',
-  tile: C.TILE,
-  cols: game.map.cols,
-  rows: game.map.rows,
-  w: game.map.w,
-  h: game.map.h,
-  grid: game.map.typeStrings(),
-  // Authoritative solidity per cell (type>=6 OR a solid prop on a floor tile).
-  // Sent so the client can mirror server collision for movement prediction.
-  solid: game.map.solid.map((row) => row.map((b) => (b ? 1 : 0)).join('')),
-  // Movement tuning the client needs to reproduce server physics exactly.
-  phys: { speed: C.PLAYER_SPEED, accel: C.PLAYER_ACCEL, radius: C.PLAYER_RADIUS, tickRate: C.TICK_RATE },
-  props,
-  weaponSpawns: game.map.weaponSpawns.map((s) => ({ weapon: s.weapon, x: s.x, y: s.y })),
-  weapons: weaponsClient,
-  assets: ASSETS,
-  maxHealth: C.PLAYER_MAX_HEALTH,
-});
+const MAP_MENU = MAP_IDS.map((id) => ({ id, name: MAPS[id].name, cols: MAPS[id].cols, rows: MAPS[id].rows }));
+
+// Built per-connection (the live map changes over a session).
+function buildConfigMsg() {
+  return JSON.stringify({
+    t: 'config',
+    // Movement tuning the client needs to reproduce server physics exactly.
+    phys: { speed: C.PLAYER_SPEED, accel: C.PLAYER_ACCEL, radius: C.PLAYER_RADIUS, tickRate: C.TICK_RATE },
+    weapons: weaponsClient,
+    assets: ASSETS,
+    maxHealth: C.PLAYER_MAX_HEALTH,
+    match: { duration: C.MATCH_DURATION, intermission: C.INTERMISSION },
+    maps: MAP_MENU,
+    mapId: game.currentMapId,
+    map: buildMapPayload(game.map),
+  });
+}
 
 function sanitizeName(raw) {
   if (typeof raw !== 'string') return 'Stick';
@@ -150,7 +187,7 @@ const wss = new WebSocket.Server({ server });
 wss.on('connection', (ws) => {
   const client = { ws, entity: null };
   clients.add(client);
-  ws.send(CONFIG_MSG);
+  ws.send(buildConfigMsg());
 
   ws.on('message', (raw) => {
     let msg;
@@ -181,6 +218,10 @@ wss.on('connection', (ws) => {
         if (typeof msg.seq === 'number' && msg.seq > e.lastInputSeq) e.lastInputSeq = msg.seq;
         break;
       }
+      case 'vote': {
+        if (client.entity && typeof msg.m === 'string') game.recordVote(client.entity.id, msg.m);
+        break;
+      }
     }
   });
 
@@ -198,6 +239,20 @@ setInterval(() => {
   } catch (e) {
     console.error('[tick] step:', e && e.stack ? e.stack : e);
     return;
+  }
+  // A new match just swapped the map: tell every client to rebuild before the
+  // next snapshot (which carries the new map's entities/positions) arrives.
+  if (game.consumeMapChange()) {
+    const mc = JSON.stringify({ t: 'mapchange', map: buildMapPayload(game.map) });
+    for (const client of clients) {
+      if (client.ws.readyState === WebSocket.OPEN) {
+        try {
+          client.ws.send(mc);
+        } catch (e) {
+          /* ignore */
+        }
+      }
+    }
   }
   if (game.tick % C.SNAPSHOT_EVERY !== 0) return;
   let shared;

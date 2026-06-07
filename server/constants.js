@@ -10,6 +10,10 @@ const SNAPSHOT_EVERY = 1;
 
 const TILE = 64; // world units per map tile
 
+// --- match / round structure ----------------------------------------------
+const MATCH_DURATION = 7 * 60; // seconds of play before the match ends
+const INTERMISSION = 30; // seconds of end screen + map voting before the next match
+
 // --- player ---------------------------------------------------------------
 const PLAYER_RADIUS = 17;
 const PLAYER_SPEED = 240; // max move speed (units/sec)
@@ -149,6 +153,8 @@ module.exports = {
   DT,
   SNAPSHOT_EVERY,
   TILE,
+  MATCH_DURATION,
+  INTERMISSION,
   PLAYER_RADIUS,
   PLAYER_SPEED,
   PLAYER_ACCEL,

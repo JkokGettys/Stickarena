@@ -25,6 +25,25 @@
       </div>
     </div>
 
+    <div id="endscreen" class="overlay endscreen hidden">
+      <div class="end-panel">
+        <div class="end-head">
+          <h2>MATCH&nbsp;OVER</h2>
+          <div id="end-countdown" class="end-countdown">Next match in 30s</div>
+        </div>
+        <div class="vote-section">
+          <div class="vote-title">Vote for the next map</div>
+          <div id="vote-row" class="vote-row"></div>
+        </div>
+        <table class="standings">
+          <thead>
+            <tr><th class="rk">#</th><th class="nm">Player</th><th>K</th><th>D</th><th>K/D</th></tr>
+          </thead>
+          <tbody id="standings-body"></tbody>
+        </table>
+      </div>
+    </div>
+
     <script type="module" src="/js/main.js"></script>
   </body>
 </html>
