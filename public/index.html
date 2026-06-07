@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+    <title>Stick Arena — top-down deathmatch</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+
+    <div id="start" class="overlay">
+      <div class="panel">
+        <h1>STICK&nbsp;ARENA</h1>
+        <p class="tag">Top-down arena deathmatch — grab weapons, frag everyone</p>
+        <input id="name" maxlength="16" placeholder="Enter a name" autocomplete="off" spellcheck="false" />
+        <button id="play">Play</button>
+        <div class="help">
+          <span><b>WASD</b> / arrows&nbsp;— move</span>
+          <span><b>Mouse</b> aim&nbsp;· <b>Click</b> / <b>Space</b> shoot</span>
+          <span>Run over <b>weapons</b> on the floor to pick them up</span>
+          <span>Out of ammo? You drop back to <b>fists</b></span>
+        </div>
+        <div id="status" class="status">connecting…</div>
+      </div>
+    </div>
+
+    <script type="module" src="/js/main.js"></script>
+  </body>
+</html>

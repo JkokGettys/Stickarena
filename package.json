@@ -1,0 +1,15 @@
+{
+  "name": "stick-arena",
+  "version": "1.0.0",
+  "description": "A top-down stickman arena deathmatch — UT-style multiplayer (bots + players) with weapon pickups, built on a server-authoritative Node + ws + canvas stack.",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js"
+  },
+  "keywords": ["game", "multiplayer", "websocket", "deathmatch", "canvas", "io-game"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.21.0"
+  }
+}

@@ -1,0 +1,128 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0e1018;
+  font-family: 'Trebuchet MS', 'Segoe UI', system-ui, sans-serif;
+  color: #eef;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#game {
+  display: block;
+  position: fixed;
+  inset: 0;
+  cursor: none;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 35%, rgba(40, 52, 84, 0.7), rgba(8, 9, 14, 0.93));
+  z-index: 10;
+}
+
+.overlay.hidden {
+  display: none;
+}
+
+.panel {
+  width: min(460px, 92vw);
+  padding: 34px 32px 26px;
+  background: rgba(22, 26, 40, 0.94);
+  border: 1px solid rgba(120, 150, 255, 0.28);
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  text-align: center;
+}
+
+.panel h1 {
+  font-size: 44px;
+  letter-spacing: 4px;
+  font-weight: 800;
+  background: linear-gradient(90deg, #5fd35a, #4ea1ff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.tag {
+  margin-top: 8px;
+  color: #aab;
+  font-size: 13.5px;
+}
+
+#name {
+  margin-top: 22px;
+  width: 100%;
+  padding: 13px 16px;
+  font-size: 17px;
+  text-align: center;
+  color: #fff;
+  background: #11131e;
+  border: 1px solid rgba(120, 150, 255, 0.35);
+  border-radius: 10px;
+  outline: none;
+}
+
+#name:focus {
+  border-color: #5fd35a;
+}
+
+button {
+  margin-top: 14px;
+  width: 100%;
+  padding: 13px 16px;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #07210f;
+  background: linear-gradient(180deg, #6ee06a, #46c14e);
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: transform 0.06s ease, filter 0.15s ease;
+}
+
+button:hover {
+  filter: brightness(1.07);
+}
+button:active {
+  transform: translateY(1px) scale(0.995);
+}
+button:disabled {
+  filter: grayscale(0.6) brightness(0.8);
+  cursor: default;
+}
+
+.help {
+  margin-top: 22px;
+  display: grid;
+  gap: 7px;
+  font-size: 12.5px;
+  color: #9aa;
+}
+.help b {
+  color: #cdd6ff;
+}
+
+.status {
+  margin-top: 16px;
+  font-size: 12px;
+  color: #7c8;
+  min-height: 16px;
+}
+.status.err {
+  color: #f77;
+}
