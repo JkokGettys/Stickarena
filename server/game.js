@@ -231,7 +231,7 @@ class Game {
       const endd = hit ? hit.dist : maxd;
       const ex = ox + cos * endd;
       const ey = oy + sin * endd;
-      this.addEffect({ e: 't', x1: Math.round(ox), y1: Math.round(oy), x2: Math.round(ex), y2: Math.round(ey), c: w.tracer || C.DEFAULT_TRACER });
+      this.addEffect({ e: 't', x1: Math.round(ox), y1: Math.round(oy), x2: Math.round(ex), y2: Math.round(ey), c: w.tracer || C.DEFAULT_TRACER, o: p.id });
       if (hit) {
         this.applyDamage(hit.p, w.damage, p);
         hit.p.vx += cos * w.knockback;
@@ -239,7 +239,7 @@ class Game {
         this.addEffect({ e: 'h', x: Math.round(ex), y: Math.round(ey) });
       }
     }
-    this.addEffect({ e: 'f', x: Math.round(ox), y: Math.round(oy), a: p.aim });
+    this.addEffect({ e: 'f', x: Math.round(ox), y: Math.round(oy), a: p.aim, c: w.tracer || C.DEFAULT_TRACER, o: p.id });
 
     if (p.ammo !== Infinity) {
       p.ammo--;

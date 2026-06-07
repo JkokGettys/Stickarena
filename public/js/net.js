@@ -12,6 +12,8 @@ let connected = false;
 let reconnectTimer = null;
 const snaps = []; // { time, self, ents:Map, lb, feed, humans }
 const effects = []; // { ...fx, birth }
+const selfFlashes = []; // local player's muzzle flashes (live clock): { birth, c }
+const selfTracers = []; // local player's bullet tracers (live clock): { birth, x1,y1,x2,y2, c }
 
 export function on(ev, cb) {
   listeners[ev] = cb;
@@ -81,9 +83,38 @@ function pushSnap(msg) {
   predict.reconcile(msg.self);
 
   const now = performance.now();
-  if (msg.fx) for (const fx of msg.fx) effects.push({ ...fx, birth: now });
+  // Prediction offset: how far ahead the locally-predicted player is vs the
+  // authoritative position this effect was emitted at. Used to move the local
+  // player's own gun effects up to the predicted gun.
+  let ox = 0;
+  let oy = 0;
+  if (msg.self && !msg.self.dead) {
+    const pred = predict.getState();
+    if (pred) {
+      ox = pred.x - msg.self.x;
+      oy = pred.y - msg.self.y;
+    }
+  }
+  if (msg.fx)
+    for (const fx of msg.fx) {
+      // Local player's own gun effects render on the LIVE clock (no interp delay)
+      // anchored to the predicted gun, so they appear at the muzzle, not behind.
+      if (fx.o === selfId) {
+        if (fx.e === 'f') {
+          selfFlashes.push({ birth: now, c: fx.c });
+          continue;
+        }
+        if (fx.e === 't') {
+          selfTracers.push({ birth: now, x1: fx.x1 + ox, y1: fx.y1 + oy, x2: fx.x2 + ox, y2: fx.y2 + oy, c: fx.c });
+          continue;
+        }
+      }
+      effects.push({ ...fx, birth: now });
+    }
   // prune old effects (>1s)
   while (effects.length && now - effects[0].birth > 1000) effects.shift();
+  while (selfFlashes.length && now - selfFlashes[0].birth > 1000) selfFlashes.shift();
+  while (selfTracers.length && now - selfTracers[0].birth > 1000) selfTracers.shift();
 }
 
 export function send(obj) {
@@ -95,6 +126,12 @@ export function spawn(name) {
 
 export function getEffects() {
   return effects;
+}
+export function getSelfFlashes() {
+  return selfFlashes;
+}
+export function getSelfTracers() {
+  return selfTracers;
 }
 
 // ---- interpolation -------------------------------------------------------

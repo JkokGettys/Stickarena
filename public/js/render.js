@@ -163,6 +163,8 @@ export function draw(view, opts) {
   for (const e of view.ents) if (e.k === 'p') drawPlayer(e, false, px, null, opts.selfId);
   if (!self.dead) drawPlayer(self, true, px, opts.localAim, opts.selfId);
   drawEffects(px);
+  // Local player's own gun effects: live clock, anchored to the predicted gun.
+  if (!self.dead) drawSelfEffects(px, self, opts.localAim);
 
   ctx.restore();
 
@@ -566,6 +568,86 @@ function drawPlayer(e, isSelf, px, aimOverride, selfId) {
   }
 }
 
+// Stylized muzzle flash: a hot core, a tapered flame cone along `ang`, and a
+// couple of star spikes. `a` is remaining life (1 = fresh). Drawn additively.
+function drawMuzzleFlash(x, y, ang, a, color, px) {
+  if (a <= 0) return;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(ang);
+  ctx.globalCompositeOperation = 'lighter';
+  const grow = 0.75 + a * 0.25;
+  const L = 36 * grow; // flame length
+  const Wd = 13 * grow; // flame half-width at the muzzle
+
+  // main flame cone, fading to transparent at the tip
+  const g = ctx.createLinearGradient(0, 0, L, 0);
+  g.addColorStop(0, `rgba(255,247,210,${0.9 * a})`);
+  g.addColorStop(0.35, `rgba(255,178,70,${0.75 * a})`);
+  g.addColorStop(1, 'rgba(255,110,30,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(0, -Wd * 0.7);
+  ctx.quadraticCurveTo(L * 0.55, -Wd, L, 0);
+  ctx.quadraticCurveTo(L * 0.55, Wd, 0, Wd * 0.7);
+  ctx.closePath();
+  ctx.fill();
+
+  // star spikes for a punchy flash
+  ctx.strokeStyle = `rgba(255,236,170,${0.55 * a})`;
+  ctx.lineWidth = 2 * px;
+  const spike = Wd * 1.6;
+  ctx.beginPath();
+  ctx.moveTo(-spike * 0.35, 0);
+  ctx.lineTo(L * 0.55, 0);
+  ctx.moveTo(Wd * 0.5, -spike);
+  ctx.lineTo(Wd * 0.5, spike);
+  ctx.stroke();
+
+  // hot bright core
+  ctx.fillStyle = `rgba(255,255,240,${a})`;
+  ctx.beginPath();
+  ctx.arc(Wd * 0.3, 0, Wd * 0.6 * (0.8 + a * 0.2), 0, 7);
+  ctx.fill();
+
+  ctx.restore();
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+}
+
+// Local player's own gun effects, rendered on the LIVE clock (no interpolation
+// delay) so they line up with the predicted character instead of trailing it.
+function drawSelfEffects(px, self, localAim) {
+  const now = performance.now();
+
+  // bullet tracers (world-locked; prediction offset already baked in net.js)
+  for (const fx of NET.getSelfTracers()) {
+    const age = now - fx.birth;
+    const ttl = 80;
+    if (age < 0 || age > ttl) continue;
+    const a = 1 - age / ttl;
+    ctx.strokeStyle = fx.c || '#ffe98a';
+    ctx.globalAlpha = a;
+    ctx.lineWidth = 2.5 * px;
+    ctx.beginPath();
+    ctx.moveTo(fx.x1, fx.y1);
+    ctx.lineTo(fx.x2, fx.y2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // muzzle flashes, anchored live to the predicted gun barrel
+  const r = (cfg.phys && cfg.phys.radius) || 17;
+  const mx = self.x + Math.cos(localAim) * (r + 8);
+  const my = self.y + Math.sin(localAim) * (r + 8);
+  for (const fx of NET.getSelfFlashes()) {
+    const age = now - fx.birth;
+    const ttl = 90;
+    if (age < 0 || age > ttl) continue;
+    drawMuzzleFlash(mx, my, localAim, 1 - age / ttl, fx.c, px);
+  }
+}
+
 function drawEffects(px) {
   const now = performance.now() - 100; // age vs the interpolated render clock (INTERP_DELAY)
   for (const fx of NET.getEffects()) {
@@ -584,15 +666,9 @@ function drawEffects(px) {
       ctx.stroke();
       ctx.globalAlpha = 1;
     } else if (fx.e === 'f') {
-      const ttl = 70;
+      const ttl = 90;
       if (age > ttl) continue;
-      const a = 1 - age / ttl;
-      ctx.globalAlpha = a;
-      ctx.fillStyle = '#fff4c2';
-      ctx.beginPath();
-      ctx.arc(fx.x, fx.y, 7 * (1 - a * 0.4), 0, 7);
-      ctx.fill();
-      ctx.globalAlpha = 1;
+      drawMuzzleFlash(fx.x, fx.y, fx.a || 0, 1 - age / ttl, fx.c, px);
     } else if (fx.e === 'h') {
       const ttl = 220;
       if (age > ttl) continue;
