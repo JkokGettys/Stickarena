@@ -112,6 +112,11 @@ const CONFIG_MSG = JSON.stringify({
   w: game.map.w,
   h: game.map.h,
   grid: game.map.typeStrings(),
+  // Authoritative solidity per cell (type>=6 OR a solid prop on a floor tile).
+  // Sent so the client can mirror server collision for movement prediction.
+  solid: game.map.solid.map((row) => row.map((b) => (b ? 1 : 0)).join('')),
+  // Movement tuning the client needs to reproduce server physics exactly.
+  phys: { speed: C.PLAYER_SPEED, accel: C.PLAYER_ACCEL, radius: C.PLAYER_RADIUS, tickRate: C.TICK_RATE },
   props,
   weaponSpawns: game.map.weaponSpawns.map((s) => ({ weapon: s.weapon, x: s.x, y: s.y })),
   weapons: weaponsClient,
@@ -173,6 +178,7 @@ wss.on('connection', (ws) => {
         inp.right = !!msg.r;
         inp.firing = !!msg.f;
         if (typeof msg.a === 'number' && isFinite(msg.a)) inp.aim = msg.a;
+        if (typeof msg.seq === 'number' && msg.seq > e.lastInputSeq) e.lastInputSeq = msg.seq;
         break;
       }
     }

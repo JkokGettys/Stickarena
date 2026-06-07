@@ -1,5 +1,7 @@
 // WebSocket connection, snapshot interpolation, and ephemeral effects.
 
+import * as predict from './predict.js';
+
 const INTERP_DELAY = 100; // ms render delay
 const MAX_SNAPS = 30;
 
@@ -74,6 +76,9 @@ function pushSnap(msg) {
   for (const e of msg.ents) ents.set(e.id, e);
   snaps.push({ time: performance.now(), self: msg.self, ents, lb: msg.lb, feed: msg.feed, humans: msg.humans, rank: msg.rank, total: msg.total });
   if (snaps.length > MAX_SNAPS) snaps.shift();
+
+  // Reconcile the locally-predicted player against this authoritative snapshot.
+  predict.reconcile(msg.self);
 
   const now = performance.now();
   if (msg.fx) for (const fx of msg.fx) effects.push({ ...fx, birth: now });

@@ -4,6 +4,7 @@ const C = require('./constants');
 const { nextId } = require('./util');
 
 const r0 = (v) => Math.round(v);
+const r1 = (v) => Math.round(v * 10) / 10;
 const r2 = (v) => Math.round(v * 100) / 100;
 const r3 = (v) => Math.round(v * 1000) / 1000;
 
@@ -39,6 +40,7 @@ class Player {
     this.killerName = null;
 
     this.input = { up: false, down: false, left: false, right: false, aim: 0, firing: false };
+    this.lastInputSeq = 0; // highest input sequence number applied (for client reconciliation)
     this.ai = null;
   }
 
@@ -90,6 +92,9 @@ class Player {
       id: this.id,
       x: r2(this.x),
       y: r2(this.y),
+      vx: r1(this.vx), // velocity + seq let the client reconcile its predicted position
+      vy: r1(this.vy),
+      seq: this.lastInputSeq,
       a: r3(this.aim),
       health: r0(this.health),
       maxHealth: this.maxHealth,

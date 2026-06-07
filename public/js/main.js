@@ -3,8 +3,10 @@
 import * as net from './net.js';
 import * as input from './input.js';
 import * as render from './render.js';
+import * as predict from './predict.js';
 
 const SEND_RATE = 30;
+let inputSeq = 0;
 
 const startScreen = document.getElementById('start');
 const nameInput = document.getElementById('name');
@@ -29,6 +31,7 @@ input.init();
 
 net.on('config', (msg) => {
   render.setConfig(msg);
+  predict.setConfig(msg);
   render.loadAssets(msg.assets);
   configReady = true;
   playBtn.disabled = false;
@@ -41,6 +44,9 @@ net.on('config', (msg) => {
   } else {
     statusEl.textContent = 'Connected — ready to play';
   }
+});
+net.on('spawned', () => {
+  predict.reset(); // start fresh prediction for the new life
 });
 net.on('open', () => {
   if (phase !== 'playing') statusEl.textContent = 'Connected';
@@ -69,7 +75,12 @@ nameInput.addEventListener('keydown', (e) => {
 });
 
 setInterval(() => {
-  if (phase === 'playing' && net.isConnected()) net.send({ t: 'input', ...input.getInput() });
+  if (phase === 'playing' && net.isConnected()) {
+    const inp = input.getInput();
+    const seq = ++inputSeq;
+    net.send({ t: 'input', ...inp, seq });
+    predict.pushInput(seq, inp, 1 / SEND_RATE); // predict this input locally, right now
+  }
 }, 1000 / SEND_RATE);
 
 function frame() {
@@ -79,7 +90,15 @@ function frame() {
     lastFrame = now;
     fps = fps * 0.9 + (1000 / Math.max(1, dt)) * 0.1;
 
-    render.draw(net.sample(), {
+    const view = net.sample();
+    // Replace the interpolated (laggy) self position with the locally predicted
+    // one so your own movement responds instantly. Other entities stay interpolated.
+    const pred = predict.getState();
+    if (view && view.self && pred) {
+      view.self = { ...view.self, x: pred.x, y: pred.y };
+    }
+
+    render.draw(view, {
       selfId: net.getSelfId(),
       selfName,
       localAim: input.getAim(),
