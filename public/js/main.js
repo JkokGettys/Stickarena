@@ -79,7 +79,7 @@ setInterval(() => {
     const inp = input.getInput();
     const seq = ++inputSeq;
     net.send({ t: 'input', ...inp, seq });
-    predict.pushInput(seq, inp, 1 / SEND_RATE); // predict this input locally, right now
+    predict.recordSent(seq, inp); // remember for reconciliation; motion is integrated per-frame
   }
 }, 1000 / SEND_RATE);
 
@@ -89,6 +89,9 @@ function frame() {
     const dt = now - lastFrame;
     lastFrame = now;
     fps = fps * 0.9 + (1000 / Math.max(1, dt)) * 0.1;
+
+    // Integrate local prediction at the display refresh rate for smooth motion.
+    if (phase === 'playing') predict.advance(input.getInput(), dt / 1000);
 
     const view = net.sample();
     // Replace the interpolated (laggy) self position with the locally predicted

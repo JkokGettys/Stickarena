@@ -4,7 +4,14 @@
 // locally so you see it instantly (no RTT + interpolation delay), then corrects
 // against each server snapshot by replaying the inputs the server hasn't yet
 // acknowledged. It mirrors server/game.js `updatePlayer` and
-// server/map.js `resolveCircle` exactly — keep them in sync.
+// server/map.js `resolveCircle`.
+//
+// Smoothness: the predicted position is integrated EVERY RENDER FRAME with the
+// live input and real frame delta-time (via advance()), not at the 30Hz network
+// send rate. That keeps your own character + camera buttery at any refresh rate.
+// Network corrections arrive at 30Hz and are folded into a decaying visual
+// offset so they never snap the camera. This trades a little physics fidelity vs
+// the server for visual smoothness — a deliberate choice.
 
 let cfg = null;
 let solid = null; // 2D array of 0/1, or null if not provided
@@ -13,8 +20,11 @@ let SPEED = 240;
 let ACCEL = 14;
 let RADIUS = 17;
 
-let state = null; // { x, y, vx, vy, a } — authoritative-predicted truth, null until first snapshot
-let pending = []; // unacknowledged inputs: [{ seq, inp, dt }]
+const SERVER_DT = 1 / 30; // server fixed timestep (for input replay during reconciliation)
+
+let state = null; // { x, y, vx, vy, a } — predicted truth, null until first snapshot
+let lastInput = { u: false, d: false, l: false, r: false, a: 0, f: false };
+let pending = []; // unacknowledged inputs, for reconciliation replay: [{ seq, inp }]
 let enabled = false; // false while dead / before first snapshot
 
 // Smooth error correction: rather than snapping `state` to each reconciled
@@ -23,8 +33,7 @@ let enabled = false; // false while dead / before first snapshot
 // state + error, and `error` eases to zero over a few frames.
 let errX = 0;
 let errY = 0;
-let lastSampleT = 0;
-const ERR_TAU = 0.07; // seconds — correction half-life-ish (smaller = snappier)
+const ERR_TAU = 0.08; // seconds — correction half-life-ish (smaller = snappier)
 const SNAP_DIST = 160; // px — beyond this we hard-snap (teleport/respawn/big knockback)
 
 export function setConfig(c) {
@@ -44,7 +53,7 @@ export function reset() {
   enabled = false;
   errX = 0;
   errY = 0;
-  lastSampleT = 0;
+  lastInput = { u: false, d: false, l: false, r: false, a: 0, f: false };
 }
 
 function clamp(v, a, b) {
@@ -121,13 +130,35 @@ function step(s, inp, dt) {
   s.y = res.y;
 }
 
-// Apply a freshly-sent input immediately and remember it for reconciliation.
-export function pushInput(seq, inp, dt) {
+// Record an input we just sent to the server (called at the 30Hz send rate).
+// Stored only for reconciliation replay — it does NOT advance the position;
+// that happens per render frame in advance().
+export function recordSent(seq, inp) {
+  lastInput = inp;
   if (!enabled || !state) return;
-  state.a = inp.a;
-  step(state, inp, dt);
-  pending.push({ seq, inp, dt });
+  pending.push({ seq, inp });
   if (pending.length > 200) pending.shift(); // safety cap
+}
+
+// Integrate the predicted player one render frame using the live input and the
+// real elapsed time. This is what makes motion smooth at the display refresh
+// rate instead of the 30Hz network rate. Also decays the correction offset.
+export function advance(inp, dt) {
+  if (!enabled || !state || !(dt > 0)) return;
+  if (inp) lastInput = inp;
+  // Clamp dt so a tab-switch / GC hitch can't fling the prediction across the map.
+  const d = Math.min(dt, 0.05);
+  state.a = lastInput.a;
+  step(state, lastInput, d);
+  if (errX !== 0 || errY !== 0) {
+    const decay = Math.exp(-d / ERR_TAU);
+    errX *= decay;
+    errY *= decay;
+    if (errX * errX + errY * errY < 0.01) {
+      errX = 0;
+      errY = 0;
+    }
+  }
 }
 
 // Reconcile against an authoritative self-snapshot from the server.
@@ -163,9 +194,10 @@ export function reconcile(self) {
     a: state.a,
   };
 
-  // Drop inputs the server has already processed, then replay the rest.
+  // Drop inputs the server has already processed, then replay the rest at the
+  // server's fixed timestep to project the authoritative state forward to "now".
   if (self.seq !== undefined) pending = pending.filter((p) => p.seq > self.seq);
-  for (const p of pending) step(base, p.inp, p.dt);
+  for (const p of pending) step(base, p.inp, SERVER_DT);
 
   // New truth.
   state.x = base.x;
@@ -191,21 +223,8 @@ export function reconcile(self) {
 }
 
 // Predicted local position (truth + decaying correction offset), or null when
-// prediction is inactive. Called once per render frame; decays the offset by
-// real elapsed time so smoothing is frame-rate independent.
+// prediction is inactive. Pure read — advance() does the integration/decay.
 export function getState() {
   if (!enabled || !state) return null;
-  const now = performance.now();
-  const dt = lastSampleT ? (now - lastSampleT) / 1000 : 0;
-  lastSampleT = now;
-  if (dt > 0 && (errX !== 0 || errY !== 0)) {
-    const decay = Math.exp(-dt / ERR_TAU);
-    errX *= decay;
-    errY *= decay;
-    if (errX * errX + errY * errY < 0.01) {
-      errX = 0;
-      errY = 0;
-    }
-  }
   return { x: state.x + errX, y: state.y + errY, vx: state.vx, vy: state.vy, a: state.a };
 }
